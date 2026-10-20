@@ -6,8 +6,9 @@ import hashlib
 import ipaddress
 import threading
 import time
-from collections import OrderedDict, deque
+from collections import Counter, OrderedDict, deque
 from dataclasses import dataclass, field
+from math import log2
 
 from . import geoip, oui
 from .decode import PacketInfo
@@ -28,6 +29,29 @@ def _is_well_known(port: int) -> bool:
     return 0 < port < 1024 or port in (1883, 3306, 3389, 5060, 5432, 5672,
                                        6379, 8080, 8443, 8883, 9092, 9200,
                                        27017)
+
+
+def _is_dga_label(label: str) -> bool:
+    label = label.strip(".").lower()
+    if len(label) < 12:
+        return False
+    counts = Counter(label)
+    entropy = -sum((count / len(label)) * log2(count / len(label))
+                   for count in counts.values())
+    if entropy < 3.5:
+        return False
+    letters = [ch for ch in label if ch.isalpha()]
+    vowels = sum(ch in "aeiou" for ch in letters)
+    vowel_ratio = vowels / max(1, len(letters))
+    digit_ratio = sum(ch.isdigit() for ch in label) / len(label)
+    run = longest = 0
+    for ch in letters:
+        if ch in "aeiou":
+            run = 0
+            continue
+        run += 1
+        longest = max(longest, run)
+    return digit_ratio >= 0.15 or vowel_ratio <= 0.2 or longest >= 6
 
 
 def _canonical(pkt: PacketInfo):
@@ -101,6 +125,7 @@ class Flow:
     org: str | None = None
     country: str | None = None
     hosts: dict = field(default_factory=dict)
+    c2s_times: deque = field(default_factory=lambda: deque(maxlen=32))
 
 
 @dataclass
@@ -133,6 +158,8 @@ class FlowTable:
         self.removed: deque = deque(maxlen=2000)
         self.signals: deque = deque(maxlen=200)
         self.signaled: set = set()
+        self.nxdomain: dict[str, deque] = {}
+        self.client_volume: dict[str, deque] = {}
         self.ip_hosts: dict[str, tuple[str, float, str]] = {}
         self.series: deque = deque(maxlen=300)
         self.seen_hosts: set = set()
@@ -166,6 +193,7 @@ class FlowTable:
                     self._learn_name(ip, name, "ptr")
 
             client, cport, server, sport = _canonical(pkt)
+            self._track_client_volume(client, pkt.ts, pkt.length)
             key = (client, server, pkt.proto, sport)
             flow = self.flows.get(key)
             if flow is not None and "S" in pkt.tcp_flags \
@@ -197,6 +225,7 @@ class FlowTable:
             if pkt.src == client:
                 flow.c2s_pkts += 1
                 flow.c2s_bytes += pkt.length
+                flow.c2s_times.append(pkt.ts)
                 if pkt.src_mac:
                     flow.client_mac = pkt.src_mac
                 if pkt.dst_mac:
@@ -217,6 +246,7 @@ class FlowTable:
             self._update_host(flow, pkt)
             if pkt.ja3:
                 flow.ja3 = pkt.ja3
+                self._check_ja3(flow, pkt)
             if pkt.alpn:
                 flow.alpn = pkt.alpn
             if pkt.tls_version:
@@ -226,6 +256,8 @@ class FlowTable:
                 flow.http_path = pkt.http_path
             if pkt.dns_qname:
                 flow.dns_qname = pkt.dns_qname
+            self._check_dns(flow, pkt, client)
+            self._check_beacon(flow)
             self._update_device(flow, pkt, client, server)
             self.dirty.add(key)
 
@@ -249,12 +281,126 @@ class FlowTable:
             if len(flow.hosts) > 16:
                 weakest = min(flow.hosts, key=flow.hosts.get)
                 flow.hosts.pop(weakest, None)
-            if flow.host and flow.host not in self.signaled:
-                self.signaled.add(flow.host)
-                self.signals.append({
-                    "ts": flow.last, "host": flow.host, "ip": flow.server,
-                    "app": flow.app, "ja3": flow.ja3, "flow": flow.id,
-                })
+            if flow.host:
+                self._signal(
+                    "new-host", 1, key=flow.host, ts=flow.last,
+                    host=flow.host, ip=flow.server, app=flow.app,
+                    ja3=flow.ja3, client=flow.client, flow=flow.id,
+                    title="new host", detail="first seen destination",
+                )
+
+    def _signal(self, kind: str, severity: int, key: str | None = None,
+                ts: float | None = None, host: str | None = None,
+                ip: str | None = None, app: str | None = None,
+                ja3: str | None = None, client: str | None = None,
+                flow: str | None = None, title: str = "",
+                detail: str = "") -> None:
+        if key is not None:
+            if key in self.signaled:
+                return
+            self.signaled.add(key)
+        self.signals.append({
+            "ts": ts if ts is not None else time.time(),
+            "kind": kind, "severity": severity, "title": title or kind,
+            "host": host, "ip": ip, "app": app, "ja3": ja3,
+            "client": client, "flow": flow, "detail": detail,
+        })
+
+    def _check_ja3(self, flow: Flow, pkt: PacketInfo) -> None:
+        if not pkt.ja3:
+            return
+        self._signal(
+            "new-ja3", 2, key=f"ja3:{pkt.ja3}", ts=pkt.ts,
+            host=self._display_host(flow), ip=flow.server, app=flow.app,
+            ja3=pkt.ja3, client=flow.client, flow=flow.id,
+            title="new JA3", detail="TLS fingerprint not seen before",
+        )
+
+    def _check_beacon(self, flow: Flow) -> None:
+        key = f"beacon:{flow.client}:{flow.server}"
+        if key in self.signaled:
+            return
+        times = list(flow.c2s_times)
+        if len(times) < 6:
+            return
+        intervals = [b - a for a, b in zip(times, times[1:]) if b > a]
+        if len(intervals) < 5:
+            return
+        mean = sum(intervals) / len(intervals)
+        if not 5.0 <= mean <= 3600.0:
+            return
+        variance = sum((value - mean) ** 2 for value in intervals) / len(intervals)
+        ratio = (variance ** 0.5) / mean
+        if ratio > 0.2:
+            return
+        self._signal(
+            "beacon", 4, key=key, ts=flow.last,
+            host=self._display_host(flow), ip=flow.server, app=flow.app,
+            ja3=flow.ja3, client=flow.client, flow=flow.id,
+            title="beaconing", detail=f"{mean:.1f}s interval · cv {ratio:.2f}",
+        )
+
+    def _track_client_volume(self, client: str, ts: float, length: int) -> None:
+        if not self._is_local(client):
+            return
+        series = self.client_volume.get(client)
+        if series is None:
+            series = deque(maxlen=60)
+            self.client_volume[client] = series
+        sec = int(ts)
+        new_second = not series or sec > series[-1][0]
+        if new_second:
+            series.append([sec, length])
+        elif sec == series[-1][0]:
+            series[-1][1] += length
+        else:
+            return
+        if not new_second or len(series) < 8:
+            return
+        key = f"volume:{client}:{sec // 30}"
+        if key in self.signaled:
+            return
+        current = series[-1][1]
+        prior = list(series)[-11:-1]
+        if len(prior) < 5:
+            return
+        baseline = sum(value for _, value in prior) / len(prior)
+        if baseline <= 0 or current < max(250_000, baseline * 5):
+            return
+        self._signal(
+            "volume-spike", 3, key=key, ts=ts, ip=client, client=client,
+            host=client, title="volume spike",
+            detail=f"{current / 1024:.0f} KB/s vs {baseline / 1024:.0f} KB/s baseline",
+        )
+
+    def _check_dns(self, flow: Flow, pkt: PacketInfo, client: str) -> None:
+        qname = pkt.dns_qname
+        if not qname:
+            return
+        if pkt.dns_response and pkt.dns_rcode == 3 and self._is_local(client):
+            events = self.nxdomain.get(client)
+            if events is None:
+                events = deque(maxlen=64)
+                self.nxdomain[client] = events
+            events.append(pkt.ts)
+            while events and pkt.ts - events[0] > 30:
+                events.popleft()
+            if len(events) >= 5:
+                self._signal(
+                    "dns-nxdomain", 3, key=f"nx:{client}:{int(pkt.ts // 60)}",
+                    ts=pkt.ts, host=qname, ip=flow.server, app="DNS",
+                    client=client, flow=flow.id, title="NXDOMAIN burst",
+                    detail=f"{len(events)} NXDOMAIN responses in 30s",
+                )
+        if not pkt.dns_response:
+            label = qname.split(".")[0]
+            if _is_dga_label(label):
+                self._signal(
+                    "dns-dga", 3, key=f"dga:{client}:{qname}", ts=pkt.ts,
+                    host=qname, ip=flow.server, app="DNS", client=client,
+                    flow=flow.id, title="DGA-like domain",
+                    detail=f"random-looking label '{label[:32]}'",
+                )
 
     def _is_local(self, ip: str) -> bool:
         return self._scope(ip) in _LOCAL_SCOPES
@@ -524,6 +670,12 @@ class FlowTable:
             "device_hostname": device.hostname if device else None,
         }
 
+    def _top_signals(self, limit: int = 60) -> list[dict]:
+        return sorted(
+            self.signals,
+            key=lambda item: (-int(item.get("severity", 1)), -float(item.get("ts", 0))),
+        )[:limit]
+
     def snapshot(self, info: dict | None = None, limit: int = 6000) -> dict:
         with self.lock:
             flows = sorted(self.flows.values(), key=lambda f: -f.last)[:limit]
@@ -534,7 +686,7 @@ class FlowTable:
                 "flows": [self._export(f) for f in flows],
                 "devices": self._devices(),
                 "series": list(self.series),
-                "signals": list(self.signals)[-40:],
+                "signals": self._top_signals(),
             }
 
     def tick(self) -> dict:
@@ -558,7 +710,7 @@ class FlowTable:
                 "devices": self._devices(),
                 "stats": self._stats(),
                 "series": list(self.series),
-                "signals": list(self.signals)[-40:],
+                "signals": self._top_signals(),
             }
 
     def _stats(self) -> dict:

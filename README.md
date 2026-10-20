@@ -11,6 +11,8 @@ Wireshark does at the header level and turns them into **flows**:
 - **JA3** TLS fingerprint, ALPN, negotiated TLS version
 - DNS answer cache that labels IP-only flows (e.g. QUIC) after the lookup
 - **ASN / organization / country** enrichment for public destinations
+- **security signals**: new hosts/JA3s, beaconing, volume spikes, NXDOMAIN
+  bursts and DGA-like domain names
 - pcap/pcapng replay and synthetic demo mode
 
 Everything is pure Python standard library plus vanilla JS. No pip installs,
@@ -127,7 +129,8 @@ and use `--pcap`.
 - **Destinations** — top destinations by bytes.
 - **Organizations** — top public destinations by ASN/organization and country.
 - **TLS fingerprints** — JA3 groups and how much traffic each carries.
-- **New destinations** — hosts as they first appear.
+- **Signals** — severity-ranked new hosts/JA3s, beaconing, client volume
+  spikes, NXDOMAIN bursts and DGA-like names.
 - **Throughput** — bytes/s area and packets/s line over the last 3 minutes.
 - **Constellation** — clients on the left, destinations on the right, animated
   edge particles weighted by volume.
@@ -186,7 +189,8 @@ python3 -m unittest discover -s tests -t . -v
 
 The suite covers Ethernet/IPv4/IPv6, radiotap/802.11, TCP flags, SNI/JA3/ALPN,
 DNS compression, HTTP hosts, flow normalization, DNS enrichment, device
-identity, ASN/organization enrichment, and pcap / pcapng round trips.
+identity, ASN/organization enrichment, security signals, and pcap / pcapng
+round trips.
 
 ## Notes
 

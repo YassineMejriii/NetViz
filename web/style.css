@@ -527,6 +527,23 @@ td.num { font-family: var(--mono); font-size: 10.5px; color: var(--dim); }
 .signals .t { font-family: var(--mono); font-size: 9px; color: var(--faint); padding-top: 1px; }
 .signals .h { font-family: var(--mono); color: var(--txt); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .signals .m { color: var(--faint); font-size: 9px; font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.signals li[data-sev="3"] { background: rgba(255, 200, 87, 0.035); }
+.signals li[data-sev="4"] { background: rgba(255, 92, 114, 0.055); }
+.signals .sev {
+  display: inline-block;
+  margin-right: 5px;
+  padding: 0 4px;
+  border: 1px solid var(--line-2);
+  border-radius: 3px;
+  font-size: 8px;
+  line-height: 13px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.signals .sev.low { color: var(--cyan); border-color: rgba(47, 227, 255, 0.3); }
+.signals .sev.medium { color: var(--amber); border-color: rgba(255, 200, 87, 0.35); }
+.signals .sev.high { color: var(--red); border-color: rgba(255, 92, 114, 0.4); }
 
 /* ---------------- viz ---------------- */
 .viz {

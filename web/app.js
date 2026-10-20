@@ -426,16 +426,24 @@
         </li>`).join('')
       : '<li class="empty-line">no TLS handshakes yet</li>';
 
-    const signals = (state.signals || []).slice(-14).reverse();
+    const SEVERITY = { 1: 'info', 2: 'low', 3: 'medium', 4: 'high' };
+    const signals = [...(state.signals || [])]
+      .sort((a, b) => (b.severity || 1) - (a.severity || 1) || b.ts - a.ts)
+      .slice(0, 20);
     el.signals.innerHTML = signals.length
-      ? signals.map((sig) => `<li>
+      ? signals.map((sig) => {
+          const severity = sig.severity || 1;
+          const label = SEVERITY[severity] || 'info';
+          const where = sig.host || sig.ip || '';
+          return `<li data-sev="${severity}">
           <span class="t">${fmtClock(sig.ts)}</span>
           <div>
-            <div class="h">${esc(sig.host || sig.ip)}</div>
-            <div class="m">${esc(sig.app || '')} ${esc(sig.ip || '')}${sig.ja3 ? ` · ${esc(sig.ja3.slice(0, 8))}` : ''}</div>
+            <div class="h"><span class="sev ${label}">${label}</span>${esc(sig.title || sig.kind || 'signal')}</div>
+            <div class="m" title="${esc(sig.detail || '')}">${esc(where)}${sig.client && sig.client !== where ? ` · ${esc(sig.client)}` : ''}${sig.detail ? ` · ${esc(sig.detail)}` : ''}</div>
           </div>
-        </li>`).join('')
-      : '<li class="empty-line">watching for new hosts</li>';
+        </li>`;
+        }).join('')
+      : '<li class="empty-line">no signals yet</li>';
   }
 
   /* ---------------- drawer ---------------- */

@@ -92,6 +92,11 @@ def dns_response(name: str, ip: str, qtype: int = 1, tid: int = 0x1234) -> bytes
     return header + question + answer
 
 
+def dns_nxdomain(name: str, qtype: int = 1, tid: int = 0x1234) -> bytes:
+    header = struct.pack("!HHHHHH", tid, 0x8183, 1, 0, 0, 0)
+    return header + dns_name(name) + struct.pack("!HH", qtype, 1)
+
+
 def http_request(host: str, path: str = "/", method: str = "GET") -> bytes:
     return (
         f"{method} {path} HTTP/1.1\r\nHost: {host}\r\n"

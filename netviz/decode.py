@@ -98,6 +98,8 @@ class PacketInfo:
     tls_version: str | None = None
     dns_qname: str | None = None
     dns_qtype: str | None = None
+    dns_rcode: int = 0
+    dns_response: bool = False
     dns_answers: tuple = ()
     dns_ptr: tuple = ()
     dhcp_hostname: str | None = None
@@ -400,6 +402,8 @@ def _decode_udp(pkt, data, p, end):
         if dns:
             pkt.dns_qname = dns["qname"]
             pkt.dns_qtype = dns["qtype"]
+            pkt.dns_rcode = dns["rcode"]
+            pkt.dns_response = dns["response"]
             pkt.dns_answers = tuple(dns["answers"])
             pkt.dns_ptr = tuple(dns["ptr"])
             if dns["qname"]:
@@ -647,6 +651,7 @@ def parse_dns(payload: bytes) -> dict | None:
     return {
         "qname": (qname or "").lower() or None,
         "qtype": qtype,
+        "rcode": flags & 0x000F,
         "response": bool(flags & 0x8000),
         "answers": answers,
         "ptr": ptrs,
