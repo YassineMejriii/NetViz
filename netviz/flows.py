@@ -9,7 +9,7 @@ import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 
-from . import oui
+from . import geoip, oui
 from .decode import PacketInfo
 
 _APP_RANK = {"TCP": 0, "UDP": 0, "TLS": 1}
@@ -97,6 +97,9 @@ class Flow:
     client_mac: str | None = None
     server_mac: str | None = None
     scope: str = "public"
+    asn: int | None = None
+    org: str | None = None
+    country: str | None = None
     hosts: dict = field(default_factory=dict)
 
 
@@ -120,6 +123,7 @@ class Device:
 class FlowTable:
     def __init__(self, max_flows: int = 8000, dns_ttl: float = 900.0):
         oui.load()
+        geoip.load()
         self.max_flows = max_flows
         self.dns_ttl = dns_ttl
         self.lock = threading.RLock()
@@ -169,11 +173,16 @@ class FlowTable:
                 self._drop(key)
                 flow = None
             if flow is None:
+                scope = self._scope(server)
+                geo = geoip.lookup(server) if scope == "public" else None
                 flow = Flow(
                     id=_flow_id(key), client=client, cport=cport,
                     server=server, server_port=sport, proto=pkt.proto,
                     app=pkt.app, first=pkt.ts, last=pkt.ts,
-                    scope=self._scope(server),
+                    scope=scope,
+                    asn=geo[0] if geo else None,
+                    org=geo[1] if geo else None,
+                    country=geo[2] if geo else None,
                 )
                 self.flows[key] = flow
                 self.lru[key] = pkt.ts
@@ -505,6 +514,9 @@ class FlowTable:
             "client_mac": flow.client_mac,
             "server_mac": flow.server_mac,
             "scope": flow.scope,
+            "asn": flow.asn,
+            "org": flow.org,
+            "country": flow.country,
             "hosts": [list(item) for item in hosts],
             "client_vendor": oui.vendor_for_mac(flow.client_mac),
             "server_vendor": oui.vendor_for_mac(flow.server_mac),
@@ -557,6 +569,7 @@ class FlowTable:
         bps = sum(s[2] for s in window) / 5.0
         apps: dict[str, int] = {}
         dests: dict[str, dict] = {}
+        orgs: dict[str, dict] = {}
         ja3s: dict[str, dict] = {}
         https_hosts = set()
         vendors: dict[str, int] = {}
@@ -579,6 +592,19 @@ class FlowTable:
             bucket["bytes"] += flow.bytes
             bucket["packets"] += flow.packets
             bucket["flows"] += 1
+            org_label = flow.org or (f"AS{flow.asn}" if flow.asn else None)
+            if flow.scope == "public" and org_label:
+                bucket = orgs.get(org_label)
+                if bucket is None:
+                    bucket = {
+                        "org": org_label, "asn": flow.asn,
+                        "country": flow.country, "bytes": 0,
+                        "packets": 0, "flows": 0,
+                    }
+                    orgs[org_label] = bucket
+                bucket["bytes"] += flow.bytes
+                bucket["packets"] += flow.packets
+                bucket["flows"] += 1
             if flow.ja3:
                 item = ja3s.get(flow.ja3)
                 if item is None:
@@ -590,6 +616,7 @@ class FlowTable:
             if flow.app == "HTTPS" and host:
                 https_hosts.add(host)
         top_dest = sorted(dests.values(), key=lambda d: -d["bytes"])[:10]
+        top_orgs = sorted(orgs.values(), key=lambda d: -d["bytes"])[:10]
         top_ja3 = sorted(ja3s.values(), key=lambda d: -d["flows"])[:6]
         top_apps = sorted(apps.items(), key=lambda kv: -kv[1])[:12]
         return {
@@ -605,6 +632,7 @@ class FlowTable:
             "top_vendors": sorted(vendors.items(), key=lambda kv: -kv[1])[:8],
             "apps": [[name, count] for name, count in top_apps],
             "top_dest": top_dest,
+            "top_orgs": top_orgs,
             "top_ja3": top_ja3,
             "uptime": now - self.boot,
             "span": (self.last_ts - self.first_ts) if self.first_ts else 0,

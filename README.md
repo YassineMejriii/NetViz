@@ -10,6 +10,7 @@ Wireshark does at the header level and turns them into **flows**:
   packet counts per direction, TTL, TCP flags, MAC addresses
 - **JA3** TLS fingerprint, ALPN, negotiated TLS version
 - DNS answer cache that labels IP-only flows (e.g. QUIC) after the lookup
+- **ASN / organization / country** enrichment for public destinations
 - pcap/pcapng replay and synthetic demo mode
 
 Everything is pure Python standard library plus vanilla JS. No pip installs,
@@ -124,6 +125,7 @@ and use `--pcap`.
   Sort by time/packets/bytes, filter by host, IP, port, JA3, or app, toggle
   HTTPS-only. Click a row for the full record.
 - **Destinations** — top destinations by bytes.
+- **Organizations** — top public destinations by ASN/organization and country.
 - **TLS fingerprints** — JA3 groups and how much traffic each carries.
 - **New destinations** — hosts as they first appear.
 - **Throughput** — bytes/s area and packets/s line over the last 3 minutes.
@@ -134,8 +136,8 @@ and use `--pcap`.
 - **CSV / JSON** — exports the currently filtered view.
 
 Exports include first/last timestamps, addresses and ports, host and host
-source, SNI, DNS name, HTTP request, TLS metadata, JA3, byte/packet counts
-per direction, TTL, flags, MACs and the flow id.
+source, SNI, DNS name, HTTP request, TLS metadata, JA3, ASN/organization/
+country, byte/packet counts per direction, TTL, flags, MACs and the flow id.
 
 ## How it works
 
@@ -145,10 +147,24 @@ netviz/
   netviz/capture.py   AF_PACKET live source, pcap replay, demo source
   netviz/pcap.py      classic pcap + pcapng reader
   netviz/flows.py     client/server normalization, aggregation, stats
+  netviz/oui.py       bundled IEEE OUI vendor lookup
+  netviz/geoip.py     bundled IPv4 ASN/organization/country lookup
   netviz/server.py    stdlib HTTP + WebSocket server, broadcast loop
   web/                dashboard (no framework, no CDN)
-tests/                frame builders, unit tests, sample capture generator
+tests/                frame builders, unit tests, data/capture generators
 ```
+
+The GeoIP table is built from the iptoasn.com feed
+(<https://iptoasn.com/data/ip2asn-v4.tsv.gz>) and bundled as
+`netviz/data/ip2asn-v4.tsv.gz`:
+
+```bash
+python3 -m tests.gen_geoip                  # full feed
+python3 -m tests.gen_geoip --subset cloud   # major cloud/CDN ASNs only
+```
+
+Lookups happen in memory at flow creation (public destinations only); the
+capture thread never fetches or reparses the feed.
 
 Flow direction is normalized by port: the well-known/low port is the server,
 so requests and responses aggregate into one row. TLS ClientHello records are
@@ -169,8 +185,8 @@ python3 -m unittest discover -s tests -t . -v
 ```
 
 The suite covers Ethernet/IPv4/IPv6, radiotap/802.11, TCP flags, SNI/JA3/ALPN,
-DNS compression, HTTP hosts, flow normalization, DNS enrichment, and pcap /
-pcapng round trips.
+DNS compression, HTTP hosts, flow normalization, DNS enrichment, device
+identity, ASN/organization enrichment, and pcap / pcapng round trips.
 
 ## Notes
 

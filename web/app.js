@@ -8,7 +8,8 @@
     csvBtn: $('csvBtn'), jsonBtn: $('jsonBtn'), search: $('search'),
     appFilter: $('appFilter'), httpsOnly: $('httpsOnly'), rowCount: $('rowCount'),
     flowRows: $('flowRows'), empty: $('empty'), emptyText: $('emptyText'),
-    topDest: $('topDest'), topJa3: $('topJa3'), signals: $('signals'),
+    topDest: $('topDest'), topOrg: $('topOrg'), topJa3: $('topJa3'),
+    signals: $('signals'),
     timeline: $('timeline'), graph: $('graph'), tableWrap: $('tableWrap'),
     drawer: $('drawer'), drawerBody: $('drawerBody'), drawerTitle: $('drawerTitle'),
     scrim: $('scrim'), closeDrawer: $('closeDrawer'), copyBtn: $('copyBtn'),
@@ -323,6 +324,7 @@
         const hay = `${flow.host || ''} ${flow.sni || ''} ${flow.dns_qname || ''} ` +
           `${flow.client} ${flow.server} ${flow.server_port} ${flow.cport} ` +
           `${flow.ja3 || ''} ${flow.app} ${flow.http_path || ''} ` +
+          `${flow.org || ''} ${flow.country || ''} ${flow.asn || ''} ` +
           `${flow.client_vendor || ''} ${flow.device_hostname || ''} ${flow.device || ''}`.toLowerCase();
         if (!hay.includes(needle)) continue;
       }
@@ -399,6 +401,20 @@
         </li>`).join('')
       : '<li class="empty-line">no destinations yet</li>';
 
+    const orgs = s.top_orgs || [];
+    const maxOrg = orgs.reduce((max, d) => Math.max(max, d.bytes), 1);
+    el.topOrg.innerHTML = orgs.length
+      ? orgs.map((d, i) => {
+          const meta = [d.asn ? `AS${d.asn}` : '', d.country || ''].filter(Boolean).join(' · ');
+          return `<li>
+          <span class="n">${pad(i + 1)}</span>
+          <span class="label" title="${esc(d.org)}"><b>${esc(truncate(d.org, 24))}</b> <span class="hint">${esc(meta)}</span></span>
+          <span class="val">${fmtBytes(d.bytes)}</span>
+          <span class="bar" style="transform:scaleX(${Math.max(0.02, d.bytes / maxOrg).toFixed(3)});background:linear-gradient(90deg,rgba(67,247,161,.55),rgba(67,247,161,.05))"></span>
+        </li>`;
+        }).join('')
+      : '<li class="empty-line">no public destinations yet</li>';
+
     const ja3s = s.top_ja3 || [];
     const maxJa3 = ja3s.reduce((max, d) => Math.max(max, d.flows), 1);
     el.topJa3.innerHTML = ja3s.length
@@ -454,6 +470,9 @@
       <dl class="kv">
         <dt>Client</dt><dd>${esc(flow.client)}<span class="hint"> :${flow.cport || '—'}</span></dd>
         <dt>Destination</dt><dd>${esc(flow.server)}<span class="hint"> :${flow.server_port || '—'}</span></dd>
+        <dt>ASN</dt><dd>${flow.asn ? `AS${esc(flow.asn)}` : '—'}</dd>
+        <dt>Organization</dt><dd>${esc(flow.org || '—')}</dd>
+        <dt>Country</dt><dd>${esc(flow.country || '—')}</dd>
         <dt>Protocol</dt><dd>${esc(flow.proto)} · <span class="hint">${esc(flow.scope)}</span></dd>
         <dt>Application</dt><dd>${esc(flow.app)}</dd>
         <dt>First seen</dt><dd>${fmtDate(flow.first)}</dd>
@@ -813,7 +832,7 @@
     'tls_version', 'alpn', 'ja3', 'packets', 'bytes', 'c2s_pkts', 's2c_pkts',
     'c2s_bytes', 's2c_bytes', 'ttl', 'flags', 'client_mac', 'server_mac',
     'client_vendor', 'server_vendor', 'device', 'device_hostname',
-    'scope', 'id',
+    'scope', 'asn', 'org', 'country', 'id',
   ];
 
   function exportRows() {
